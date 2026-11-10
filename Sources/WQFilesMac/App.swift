@@ -3,7 +3,10 @@ import AppKit
 import UniformTypeIdentifiers
 import CryptoKit
 
-// WQFilesMac — v2 (10 nov 2026): Espacio, Duplicados, Limpieza Xcode, diseño con tarjetas
+// WQFilesMac — v3 (10 nov 2026): todo más entendible para quien lo usa
+// por primera vez. Pantalla de inicio con 3 pasos, cada sección explica
+// en español simple qué hace, qué es seguro borrar y qué NO se borra
+// nunca, y antes de borrar hay un resumen claro.
 // Idea de WQFiles (kolbicz, iOS 27, GPL): explorador de archivos,
 // gestor de datos de apps y limpiador de caché. Código NUEVO en SwiftUI
 // para Mac, sin copiar su código Objective-C y sin worse_query:
@@ -128,6 +131,86 @@ func isSystemPath(_ url: URL) -> Bool {
     let p = url.path
     return p == "/System" || p.hasPrefix("/System/") || p == "/usr" || p.hasPrefix("/usr/")
         || p == "/bin" || p == "/sbin" || p == "/etc" || p == "/private/etc"
+}
+
+// MARK: - Explicaciones en español simple (v3: "¿cómo sabe qué borrar?")
+//
+// Cómo sabe la app qué borrar, en palabras simples:
+// - Duplicados: dos archivos son el mismo solo si pesan EXACTAMENTE lo
+//   mismo Y tienen la misma huella SHA256 (como una huella digital del
+//   contenido). Que se llamen igual no basta.
+// - Caché de Xcode: son archivos temporales que Xcode crea al compilar.
+//   Si se borran, Xcode los vuelve a crear solo la próxima vez que
+//   compilas. No son tu proyecto ni tu juego.
+// - Espacio: la app solo MIDE carpetas y te dice cuánto pesan. No borra
+//   nada sola: tú eliges qué mandar a la Papelera.
+
+/// Qué es esta carpeta y por qué se puede (o no) borrar.
+func explicacionCarpeta(_ name: String) -> String {
+    let n = name.lowercased()
+    if n.contains("deriveddata") { return "Archivos temporales que Xcode crea al compilar tus apps. Si los borras, Xcode los vuelve a crear solo." }
+    if n.contains("caches") || n.contains("caché") { return "Archivos temporales que las apps guardan para ir más rápido. Si los borras, la app los vuelve a crear." }
+    if n.contains("downloads") { return "Todo lo que bajaste de internet. Aquí puede haber instaladores, zips y archivos que ya no necesitas." }
+    if n.contains("documents") { return "Tus documentos personales. Aquí NO borres a ciegas: revisa archivo por archivo." }
+    if n.contains("desktop") { return "Lo que tienes en el Escritorio. Revisa antes de borrar: puede haber cosas importantes." }
+    if n.contains("forktikilauncher") { return "Carpeta con los juegos ya compilados (IPA y RomFS). Si borras esto, pierdes el juego compilado y hay que volver a compilar." }
+    if n.contains("archives") { return "Copias viejas de apps que compilaste antes. Solo sirven si quieres volver a una versión vieja." }
+    if n.contains("devicesupport") { return "Datos para depurar iPhones viejos en Xcode. Las versiones viejas se pueden borrar; Xcode baja la que necesite." }
+    if n.contains("coresimulator") || n.contains("simulator") { return "El simulador de iPhone/iPad de Xcode. Ocupa mucho y se puede borrar; Xcode lo vuelve a crear." }
+    return "Carpeta de tu Mac. Revisa qué hay dentro antes de borrarla."
+}
+
+/// ¿Es seguro borrar esto sin revisar? Verde = seguro, naranja = revisa antes.
+func esSeguroBorrar(_ name: String) -> Bool {
+    let n = name.lowercased()
+    if n.contains("deriveddata") || n.contains("caches") || n.contains("caché")
+        || n.contains("devicesupport") || n.contains("coresimulator") || n.contains("simulator") {
+        return true
+    }
+    return false
+}
+
+func textoSeguridad(_ name: String) -> String {
+    esSeguroBorrar(name)
+        ? "✅ Seguro de borrar, se vuelve a crear solo"
+        : "⚠️ Revisa antes de borrar"
+}
+
+/// Resumen que se muestra SIEMPRE antes de borrar algo (v3).
+func resumenAntesDeBorrar(cantidad: String, liberado: String) -> String {
+    "Vas a borrar \(cantidad). Vas a liberar \(liberado). Todo va a la Papelera, puedes recuperarlo desde ahí. Tus juegos (.nup, .nsp) y prod.keys NO se tocan nunca."
+}
+
+// MARK: - Vistas pequeñas reutilizables (v3)
+
+/// Título de sección en español simple + explicación de 1-2 frases.
+struct EncabezadoSeccion: View {
+    let titulo: String
+    let explicacion: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(titulo).font(.title3).bold()
+            Text(explicacion).font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.blue.opacity(0.08))
+        .cornerRadius(12)
+    }
+}
+
+/// Etiqueta verde (seguro) o naranja (revisa antes).
+struct EtiquetaSeguridad: View {
+    let nombre: String
+    var body: some View {
+        Text(textoSeguridad(nombre))
+            .font(.caption).bold()
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(esSeguroBorrar(nombre) ? Color.green.opacity(0.2) : Color.orange.opacity(0.25))
+            .foregroundStyle(esSeguroBorrar(nombre) ? Color.green : Color.orange)
+            .cornerRadius(8)
+    }
 }
 
 // MARK: - Store
@@ -504,29 +587,37 @@ final class Store: ObservableObject {
 struct ContentView: View {
     @StateObject private var store = Store()
     @State private var tab = 0
-    @State private var showWelcome = true
+    // Modo principiante prendido por defecto (v3): solo muestra Inicio,
+    // Espacio, Duplicados y Limpiar Xcode. Lo avanzado (Archivos, Apps,
+    // Limpieza de caché, Registro) aparece con "Modo avanzado".
+    @AppStorage("modoPrincipiante") private var modoPrincipiante = true
 
     var body: some View {
         VStack(spacing: 0) {
-            if showWelcome {
-                HStack {
-                    Label("¿Primera vez? Todo lo que borres va a la Papelera, nunca se borra para siempre. Los juegos (.nup/.nsp) y prod.keys están protegidos.", systemImage: "hand.wave.fill")
-                        .font(.callout)
-                    Spacer()
-                    Button("Entendido") { showWelcome = false }
-                        .buttonStyle(.borderedProminent)
+            HStack {
+                Label("TikiFilesMac", systemImage: "folder.badge.gearshape")
+                    .font(.headline)
+                Spacer()
+                Text(modoPrincipiante ? "👶 Modo principiante" : "🧑‍💻 Modo avanzado")
+                    .font(.callout).foregroundStyle(.secondary)
+                Button(modoPrincipiante ? "Ver modo avanzado" : "Volver a modo principiante") {
+                    modoPrincipiante.toggle()
                 }
-                .padding(10)
-                .background(Color.blue.opacity(0.12))
+                .buttonStyle(.bordered)
             }
+            .padding(.horizontal, 12).padding(.top, 8)
             TabView(selection: $tab) {
-                FilesView(store: store).tabItem { Label("Archivos", systemImage: "folder") }.tag(0)
+                InicioView(store: store, tab: $tab, modoPrincipiante: $modoPrincipiante)
+                    .tabItem { Label("Inicio", systemImage: "house") }.tag(0)
                 SpaceView(store: store).tabItem { Label("Espacio", systemImage: "internaldrive") }.tag(1)
                 DuplicatesView(store: store).tabItem { Label("Duplicados", systemImage: "doc.on.doc") }.tag(2)
                 XcodeCleanView(store: store).tabItem { Label("Limpiar Xcode", systemImage: "hammer") }.tag(3)
-                AppsView(store: store).tabItem { Label("Apps", systemImage: "app.badge") }.tag(4)
-                CacheView(store: store).tabItem { Label("Limpieza de caché", systemImage: "trash") }.tag(5)
-                LogView(store: store).tabItem { Label("Registro", systemImage: "list.clipboard") }.tag(6)
+                if !modoPrincipiante {
+                    FilesView(store: store).tabItem { Label("Archivos", systemImage: "folder") }.tag(4)
+                    AppsView(store: store).tabItem { Label("Apps", systemImage: "app.badge") }.tag(5)
+                    CacheView(store: store).tabItem { Label("Limpieza de caché", systemImage: "trash") }.tag(6)
+                    LogView(store: store).tabItem { Label("Registro", systemImage: "list.clipboard") }.tag(7)
+                }
             }
             HStack {
                 Text(store.status).font(.callout).foregroundStyle(.secondary)
@@ -535,6 +626,81 @@ struct ContentView: View {
             }
             .padding(8)
         }
+    }
+}
+
+// MARK: - Inicio: ¿Primera vez aquí? (v3)
+
+struct InicioView: View {
+    @ObservedObject var store: Store
+    @Binding var tab: Int
+    @Binding var modoPrincipiante: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("👋 ¿Primera vez aquí? Empieza aquí").font(.title2).bold()
+                    Text("Esta app te ayuda a liberar espacio en tu Mac sin borrar nada importante. Nada se borra para siempre: todo va a la Papelera y lo puedes recuperar.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(16)
+
+                Text("3 pasos simples").font(.headline)
+                VStack(alignment: .leading, spacing: 10) {
+                    PasoInicio(numero: "1", titulo: "Mide tu espacio", texto: "Ve a la pestaña Espacio y dale a \"Medir espacio\". Ahí ves qué carpetas pesan más y cuánto tienes libre.")
+                    PasoInicio(numero: "2", titulo: "Limpia lo seguro", texto: "Ve a \"Limpiar Xcode\" y dale a \"Medir Xcode\". Lo que dice ✅ Seguro se puede borrar: Xcode lo vuelve a crear solo.")
+                    PasoInicio(numero: "3", titulo: "Busca duplicados", texto: "Ve a \"Duplicados\", elige Downloads y dale a \"Buscar duplicados\". La app se queda con una copia y manda las demás a la Papelera.")
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("🤔 ¿Cómo sabe qué borrar?").font(.headline)
+                    Text("• Duplicados: dos archivos son el mismo solo si pesan exactamente lo mismo Y tienen la misma huella digital (SHA256) por dentro. Que se llamen igual no basta.\n• Caché de Xcode: son archivos temporales que Xcode crea al compilar. Si se borran, Xcode los vuelve a crear solo.\n• Espacio: la app solo mide carpetas y te dice cuánto pesan. Nunca borra nada sola: tú eliges.")
+                        .font(.callout)
+                }
+                .padding(12).background(Color.green.opacity(0.08)).cornerRadius(12)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("🔒 Lo que NUNCA se borra").font(.headline)
+                    Text("Tus juegos (.nup, .nsp, .nsz, .xci), prod.keys y las carpetas de juegos están protegidos: la app no los borra ni aunque los selecciones. Todo lo demás va a la Papelera, nunca se borra para siempre.")
+                        .font(.callout)
+                }
+                .padding(12).background(Color.orange.opacity(0.12)).cornerRadius(12)
+
+                HStack(spacing: 10) {
+                    Button("📊 Ver mi espacio") { tab = 1 }.buttonStyle(.borderedProminent)
+                    Button("📄 Buscar duplicados") { tab = 2 }.buttonStyle(.bordered)
+                    Button("🧹 Limpiar Xcode") { tab = 3 }.buttonStyle(.bordered)
+                }
+                Button(modoPrincipiante ? "Quiero ver todo (modo avanzado: Archivos, Apps, Caché y Registro)" : "Volver a modo principiante (solo lo simple)") {
+                    modoPrincipiante.toggle()
+                }
+                .font(.callout)
+            }
+            .padding(14)
+        }
+    }
+}
+
+struct PasoInicio: View {
+    let numero: String
+    let titulo: String
+    let texto: String
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(numero).font(.title3).bold()
+                .frame(width: 34, height: 34)
+                .background(Color.blue).foregroundStyle(.white).cornerRadius(17)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(titulo).font(.headline)
+                Text(texto).font(.callout).foregroundStyle(.secondary)
+            }
+        }
+        .padding(10).background(Color.white).cornerRadius(12)
+        .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
     }
 }
 
@@ -553,6 +719,8 @@ struct FilesView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            EncabezadoSeccion(titulo: "📁 Archivos: ver y mover tus archivos",
+                explicacion: "Aquí ves lo que hay en cada carpeta, como en el Finder. Solo borra algo si sabes qué es: si no sabes, mejor no lo toques. Lo que borres va a la Papelera, y los juegos y prod.keys están protegidos y no se borran.")
             HStack {
                 Button("⬆️ Subir") { store.goUp() }
                 Text(store.currentPath.path).font(.callout).lineLimit(1).truncationMode(.middle)
@@ -591,7 +759,7 @@ struct FilesView: View {
         .padding(12)
         .alert(item: $toTrash) { entry in
             Alert(title: Text("¿Borrar \(entry.name)?"),
-                  message: Text("Va a la Papelera, no se borra para siempre. Puedes recuperarlo desde la Papelera."),
+                  message: Text(resumenAntesDeBorrar(cantidad: "el archivo \(entry.name) (\(entry.isDir ? "carpeta" : formatBytes(entry.size)))", liberado: entry.isDir ? "el espacio que pese esa carpeta" : formatBytes(entry.size)) + (isProtected(entry.url) ? "\n⚠️ Este archivo está protegido y NO se va a borrar." : "")),
                   primaryButton: .destructive(Text("A la Papelera")) { store.trash(entry.url) },
                   secondaryButton: .cancel(Text("Cancelar")))
         }
@@ -625,6 +793,8 @@ struct AppsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            EncabezadoSeccion(titulo: "📱 Apps: cuánto pesan y qué datos guardan",
+                explicacion: "Aquí ves cada app instalada, cuánto pesa la app y cuánto pesan sus datos (fotos, partidas, documentos). Limpiar los datos borra tus cosas de esa app: haz primero un respaldo ZIP y cierra la app antes. ⚠️ Revisa antes de borrar.")
             HStack {
                 Button("🔍 Buscar apps") { store.scanApps() }
                 TextField("Buscar por nombre o bundle id…", text: $search)
@@ -653,7 +823,7 @@ struct AppsView: View {
             set: { _ in toClear = nil }
         )) { item in
             Alert(title: Text("¿Limpiar datos de \(item.app.name)?"),
-                  message: Text("Se borran Documents, Library y tmp de esa app. Primero haz un respaldo ZIP. Va a la Papelera."),
+                  message: Text(resumenAntesDeBorrar(cantidad: "los datos de \(item.app.name) (Documents, Library y archivos temporales, \(formatBytes(item.app.dataSize)))", liberado: formatBytes(item.app.dataSize)) + "\n⚠️ Esto borra tus cosas de esa app. Primero haz un respaldo ZIP y cierra la app."),
                   primaryButton: .destructive(Text("Limpiar (a Papelera)")) {
                     if let c = item.app.containerURL { store.trash(c) }
                     store.scanApps()
@@ -678,6 +848,8 @@ struct CacheView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            EncabezadoSeccion(titulo: "🗑 Limpieza de caché: archivos temporales de las apps",
+                explicacion: "La caché son archivos temporales que cada app guarda para ir más rápido. ¿Cómo sabe la app que se pueden borrar? Porque son temporales: si se borran, la app los vuelve a crear sola. ✅ Seguro de borrar, se vuelve a crear solo. La carpeta vacía se recrea para que la app no falle.")
             HStack {
                 Button("🔍 Medir caché") { store.scanCaches() }
                 Button("Seleccionar grandes (50 MB+)") {
@@ -691,11 +863,15 @@ struct CacheView: View {
                 Button("Limpiar seleccionadas") { confirmClean = true }
                     .buttonStyle(.borderedProminent).disabled(totalSelected == 0)
             }
-            Text("Solo se limpia ~/Library/Caches. Nunca se borra permanente: va a la Papelera y se recrea la carpeta vacía.").font(.callout).foregroundStyle(.secondary)
+            Text("Solo se limpia ~/Library/Caches. ✅ Seguro: son archivos temporales, la app los vuelve a crear. Nunca se borra permanente: va a la Papelera y se recrea la carpeta vacía.").font(.callout).foregroundStyle(.secondary)
             List(store.caches.indices, id: \.self) { i in
                 HStack {
                     Toggle("", isOn: $store.caches[i].selected)
-                    Text(store.caches[i].name).lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(store.caches[i].name).lineLimit(1)
+                        Text("Archivos temporales de \(store.caches[i].name). Se vuelven a crear solos.").font(.caption).foregroundStyle(.secondary)
+                        EtiquetaSeguridad(nombre: store.caches[i].name)
+                    }
                     Spacer()
                     Text(formatBytes(store.caches[i].size)).font(.callout)
                 }
@@ -706,7 +882,7 @@ struct CacheView: View {
             Button("Limpiar (a Papelera)", role: .destructive) { store.cleanSelectedCaches() }
             Button("Cancelar", role: .cancel) {}
         } message: {
-            Text("Las carpetas van a la Papelera, no se borran para siempre.")
+            Text(resumenAntesDeBorrar(cantidad: "\(store.caches.filter { $0.selected }.count) carpetas de caché", liberado: formatBytes(totalSelected)))
         }
     }
 }
@@ -714,10 +890,13 @@ struct CacheView: View {
 // MARK: - Espacio
 struct SpaceView: View {
     @ObservedObject var store: Store
+    @State private var carpetaABorrar: HeavyFolder?
     var used: Int64 { max(0, store.diskTotal - store.diskFree) }
     var usedPct: Double { store.diskTotal > 0 ? Double(used) / Double(store.diskTotal) : 0 }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            EncabezadoSeccion(titulo: "💾 Espacio: cuánto te queda y qué pesa más",
+                explicacion: "Aquí la app solo MIDE: te dice cuánto espacio libre tienes y qué carpetas pesan más. No borra nada sola. Cada carpeta dice qué es, por qué se puede borrar y si es segura (verde) o hay que revisar antes (naranja).")
             HStack {
                 Button("📊 Medir espacio") { store.scanDisk() }
                 Spacer()
@@ -735,18 +914,30 @@ struct SpaceView: View {
                 if usedPct > 0.85 { Text("⚠️ Disco casi lleno: limpia DerivedData o la caché de Xcode.").foregroundStyle(.red).font(.callout) }
             }
             .padding(12).background(Color.white).cornerRadius(16).shadow(color: .black.opacity(0.08), radius: 6, y: 2)
-            Text("Carpetas que más pesan").font(.headline)
+            Text("Carpetas que más pesan — toca una para ver qué es y si es seguro borrarla").font(.headline)
             List(store.heavyFolders) { f in
                 HStack {
-                    VStack(alignment: .leading) { Text(f.name).font(.headline); Text(f.url.path).font(.callout).foregroundStyle(.secondary).lineLimit(1) }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(f.name).font(.headline)
+                        Text(explicacionCarpeta(f.name)).font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(f.url.path).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        EtiquetaSeguridad(nombre: f.name)
+                    }
                     Spacer()
                     Text(formatBytes(f.size)).font(.headline)
                     Button("Abrir") { NSWorkspace.shared.open(f.url) }
-                    Button("A Papelera") { store.trash(f.url) }.foregroundStyle(.red)
+                    Button("A Papelera") { carpetaABorrar = f }.foregroundStyle(.red)
                 }
             }
             Text("Nunca se borran .nup/.nsp, prod.keys ni carpetas de juegos. Todo va a la Papelera.").font(.callout).foregroundStyle(.secondary)
         }.padding(12)
+        .alert(item: $carpetaABorrar) { f in
+            Alert(title: Text("¿Borrar \(f.name)?"),
+                  message: Text(explicacionCarpeta(f.name) + "\n\n" + resumenAntesDeBorrar(cantidad: "la carpeta \(f.name)", liberado: formatBytes(f.size))),
+                  primaryButton: .destructive(Text("A la Papelera")) { store.trash(f.url) },
+                  secondaryButton: .cancel(Text("Cancelar")))
+        }
     }
 }
 
@@ -758,6 +949,8 @@ struct DuplicatesView: View {
     var totalWaste: Int64 { store.dupGroups.reduce(0) { $0 + $1.waste } }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            EncabezadoSeccion(titulo: "📄 Duplicados: el mismo archivo dos veces",
+                explicacion: "¿Cómo sabe la app que son duplicados? Primero compara el tamaño: si pesan distinto, no son el mismo. Si pesan igual, compara su huella digital (SHA256) por dentro. Solo si las dos cosas son iguales, es el mismo archivo. Se queda el primero de cada grupo y los demás van a la Papelera.")
             HStack {
                 Text("Carpeta: \(store.dupFolder.path)").font(.callout).lineLimit(1)
                 Spacer()
@@ -769,6 +962,7 @@ struct DuplicatesView: View {
             List(store.dupGroups) { g in
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(g.files.count) copias · \(formatBytes(g.size)) c/u · se liberan \(formatBytes(g.waste))").font(.headline)
+                    Text("Son el mismo archivo: pesan igual y tienen la misma huella (SHA256). ✅ Seguro de borrar las copias, se queda una.").font(.caption).foregroundStyle(.secondary)
                     ForEach(Array(g.files.enumerated()), id: \.element.id) { idx, f in
                         HStack { Text(idx == 0 ? "✅ se queda" : "🗑 se borra").font(.callout); Text(f.url.path).font(.callout).lineLimit(1) }
                     }
@@ -782,7 +976,7 @@ struct DuplicatesView: View {
         .alert("¿Mandar \(store.dupGroups.reduce(0) { $0 + $1.files.count - 1 }) duplicados a la Papelera?", isPresented: $confirmTrash) {
             Button("A la Papelera", role: .destructive) { store.trashDuplicates() }
             Button("Cancelar", role: .cancel) {}
-        } message: { Text("Se queda el primer archivo de cada grupo. Todo va a la Papelera, se puede recuperar.") }
+        } message: { Text(resumenAntesDeBorrar(cantidad: "\(store.dupGroups.reduce(0) { $0 + $1.files.count - 1 }) archivos duplicados", liberado: formatBytes(totalWaste)) + "\nSe queda el primer archivo de cada grupo, solo se borran las copias exactas.") }
     }
 }
 
@@ -793,6 +987,8 @@ struct XcodeCleanView: View {
     var totalSelected: Int64 { store.xcodeItems.filter { $0.selected }.reduce(0) { $0 + $1.size } }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            EncabezadoSeccion(titulo: "🧹 Limpiar Xcode: archivos temporales de compilar",
+                explicacion: "¿Cómo sabe la app que se pueden borrar? DerivedData, DeviceSupport viejo y la caché son archivos temporales que Xcode crea al compilar. Si se borran, Xcode los vuelve a crear solo la próxima vez que compilas. No son tu proyecto ni tu juego. ✅ Seguro, salvo Archives: eso son copias viejas de tus apps, revísalo antes.")
             HStack {
                 Button("🔍 Medir Xcode") { store.scanXcode() }
                 Button("Seleccionar todo") { for i in store.xcodeItems.indices { store.xcodeItems[i].selected = true } }
@@ -801,11 +997,16 @@ struct XcodeCleanView: View {
                 Text("Se liberarían: \(formatBytes(totalSelected))").font(.headline)
                 Button("Limpiar seleccionados") { confirmClean = true }.buttonStyle(.borderedProminent).disabled(totalSelected == 0)
             }
-            Text("DerivedData se puede borrar sin miedo: Xcode lo vuelve a generar al compilar. No borres el proyecto actual si lo estás compilando ahora. DeviceSupport viejo, Archives y Simulator también se regeneran. Todo va a la Papelera, nunca permanente.").font(.callout).foregroundStyle(.secondary)
+            Text("No borres el proyecto que estés compilando en este momento. Todo va a la Papelera, nunca permanente.").font(.callout).foregroundStyle(.secondary)
             List(store.xcodeItems.indices, id: \.self) { i in
                 HStack {
                     Toggle("", isOn: $store.xcodeItems[i].selected)
-                    VStack(alignment: .leading) { Text(store.xcodeItems[i].name).font(.headline); Text(store.xcodeItems[i].kind).font(.callout).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(store.xcodeItems[i].name).font(.headline)
+                        Text(explicacionCarpeta(store.xcodeItems[i].name)).font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        EtiquetaSeguridad(nombre: store.xcodeItems[i].name)
+                    }
                     Spacer()
                     Text(formatBytes(store.xcodeItems[i].size)).font(.headline)
                 }
@@ -815,7 +1016,7 @@ struct XcodeCleanView: View {
         .alert("¿Limpiar \(formatBytes(totalSelected)) de Xcode?", isPresented: $confirmClean) {
             Button("Limpiar (a Papelera)", role: .destructive) { store.cleanSelectedXcode() }
             Button("Cancelar", role: .cancel) {}
-        } message: { Text("Las carpetas van a la Papelera, no se borran para siempre. Los juegos y prod.keys nunca se tocan.") }
+        } message: { Text(resumenAntesDeBorrar(cantidad: "\(store.xcodeItems.filter { $0.selected }.count) carpetas de Xcode", liberado: formatBytes(totalSelected))) }
     }
 }
 
@@ -826,6 +1027,8 @@ struct LogView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            EncabezadoSeccion(titulo: "📋 Registro: qué se borró y qué se respaldó",
+                explicacion: "Aquí queda anotado todo lo que la app mandó a la Papelera, respaldó o limpió, con la hora. Si algo se borró por error, aquí ves qué fue para buscarlo en la Papelera.")
             HStack {
                 Text("Todo lo que se borró, respaldó o limpió queda aquí.").font(.callout).foregroundStyle(.secondary)
                 Spacer()
