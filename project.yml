@@ -1,0 +1,15 @@
+name: WQFilesMac
+options:
+  bundleIdPrefix: com.tiki.wqfilesmac
+targets:
+  WQFilesMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sources/WQFilesMac
+    settings:
+      GENERATE_INFOPLIST_FILE: YES
+      PRODUCT_BUNDLE_IDENTIFIER: com.tiki.wqfilesmac
+      SWIFT_VERSION: "5.0"
+      MACOSX_DEPLOYMENT_TARGET: "26.0"
